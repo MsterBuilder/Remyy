@@ -89,6 +89,12 @@ Remyy is an independent project. It is not affiliated with or endorsed by Google
 
 MIT. See [LICENSE](LICENSE).
 
+## Reminders, sports and self-check
+
+- **Apple Reminders:** add, list and complete reminders by voice. macOS asks for permission the first time.
+- **Sports scores:** live and recent scores for the big leagues (NBA, NFL, MLB, NHL, college, soccer, UFC, F1, golf, tennis) from ESPN's public scoreboard feed. It is unofficial and may change without notice.
+- **Self-check:** the setup screen has a *Run self-check* button that tests your key, microphone, helper, Calendar, Reminders, news, sports and weather, and says what failed.
+
 ## Update notice
 
 Once a day the setup screen asks GitHub's public API for the latest release of this repository and shows a banner if it is newer than the version in `remyy.html` (`APP_VERSION`). Nothing is sent except that request. Maintainers: when you publish a new GitHub Release, tag it like `v1.2.0` and set `APP_VERSION` to match.
