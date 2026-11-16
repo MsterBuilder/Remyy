@@ -459,6 +459,22 @@ function renderMem(){
   $("memnote").textContent=(HAS_MAC?"Saved on this Mac in ~/.remyy/memory.json. ":"Saved in this browser only. Start the helper (python3 remyy_server.py) to keep it in a file on your Mac. ")+memory.length+" saved. Changes reach Remyy the next time it wakes.";
 }
 
+let liteCache=null;
+async function liteModels(key){                  // newest "flash-lite" text models: they have far higher free daily limits
+  if(liteCache) return liteCache;
+  let list=[];
+  try{
+    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${encodeURIComponent(key)}`);
+    const j=await r.json();
+    list=(j.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent")&&/flash-lite/i.test(m.name)&&!/(image|tts|live|audio|embed|robotics|computer)/i.test(m.name))
+      .map(m=>String(m.name).replace(/^models\//,""));
+  }catch{}
+  const ver=n=>{ const m=/gemini-(\d+(?:\.\d+)?)/.exec(n); return m?parseFloat(m[1]):0; };
+  list.sort((a,b)=>ver(b)-ver(a)||(/preview/.test(a)?1:0)-(/preview/.test(b)?1:0));
+  const top=list.slice(0,2);
+  if(top.length) liteCache=top;
+  return top;
+}
 function searchError(status,msg){
   msg=String(msg||"");
   if(status===429||/quota|rate|exhaust/i.test(msg)) return "the Gemini search limit was reached (quota or rate limit)";
@@ -473,8 +489,10 @@ async function webSearch(q){
   const sys="Answer in 2 to 4 short sentences using current web results. Include the key facts and numbers (for weather: conditions, temperature and today's high and low; for news: the top 3 stories in a few words each). Current date and time: "+now.toLocaleString()+"."
     +(city?" The user is in "+city+"; use that for weather, local news or nearby places unless they name another place.":"");
   // the first model has its extra thinking switched off so it answers quickly
-  const tries=[["gemini-2.5-flash",{thinkingConfig:{thinkingBudget:0}}],["gemini-flash-latest",null]];
+  const lite=await liteModels(key), t0=Date.now();
+  const tries=[...lite.map(m=>[m,null]),["gemini-2.5-flash",{thinkingConfig:{thinkingBudget:0}}],["gemini-flash-latest",null]];
   for(const [m,gen] of tries){
+    if(Date.now()-t0>15000) break;               // never keep the user waiting more than about 15 seconds
     const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),9000);
     try{
       const body={systemInstruction:{parts:[{text:sys}]},contents:[{role:"user",parts:[{text:q}]}],tools:[{googleSearch:{}}]};
@@ -482,7 +500,7 @@ async function webSearch(q){
       const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`,{
         method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:ctl.signal});
       const j=await r.json().catch(()=>({}));
-      if(!r.ok){ last=searchError(r.status,j.error&&j.error.message); console.warn("web_search",m,r.status,j.error&&j.error.message); if(r.status===429||r.status===401||r.status===403) break; continue; }
+      if(!r.ok){ last=searchError(r.status,j.error&&j.error.message); console.warn("web_search",m,r.status,j.error&&j.error.message); if(r.status===401||r.status===403) break; continue; }
       const text=((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[]).map(x=>x.text||"").join("").trim();
       if(text){ try{ showSources((j.candidates[0].groundingMetadata||{}).groundingChunks||[]); }catch{} return {ok:true,answer:text}; }
       last="the search returned no answer";
@@ -501,7 +519,7 @@ async function lookAtScreen(a){
     const key=$("key").value.trim(); let last="";
     const parts=[{text:"These are screenshots from the user's Mac. Ignore Remyy's own dark window with the glowing orb. Answer in 2 to 5 short sentences and quote any important on-screen text exactly. Question: "+q}];
     cap.images.forEach(b=>parts.push({inlineData:{mimeType:"image/jpeg",data:b}}));
-    for(const m of ["gemini-flash-latest","gemini-2.5-flash"]){
+    for(const m of [...new Set(["gemini-flash-latest","gemini-2.5-flash",...(await liteModels(key))])]){
       try{
         const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`,{
           method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contents:[{role:"user",parts}]})});
