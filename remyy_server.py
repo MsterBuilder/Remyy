@@ -562,7 +562,24 @@ WINDOW_JS = """function run(argv) {
 
 
 def run_as(script, args=(), timeout=40):
-    return osa(*as_lines(script + AS_HELPERS), args=[safe_arg(a) for a in args], timeout=timeout)
+    """Run an AppleScript. Calendar, Reminders and Notes get launched by scripting them, so if one was not
+    already open it is quit again afterwards (a failed or slow script still closes it)."""
+    m = re.search(r'tell application "(Calendar|Reminders|Notes)"', script)
+    app = m.group(1) if m else None
+    was_running = True
+    if app:
+        try:
+            was_running = osa('return (application "%s" is running) as text' % app, timeout=5) == "true"
+        except Exception:
+            was_running = True            # unsure: leave the app alone
+    try:
+        return osa(*as_lines(script + AS_HELPERS), args=[safe_arg(a) for a in args], timeout=timeout)
+    finally:
+        if app and not was_running:
+            try:
+                osa('tell application "%s" to quit' % app, timeout=8)
+            except Exception:
+                pass
 
 
 def parse_records(out, nfields):
