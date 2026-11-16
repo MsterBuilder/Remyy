@@ -23,7 +23,7 @@ cp "$HERE/remyy.html" "$HERE/remyy_server.py" "$APP/Contents/Resources/"
 # ---------- launcher ----------
 cat > "$APP/Contents/MacOS/Remyy" <<'LAUNCHER'
 #!/bin/bash
-# Remyy launcher: starts the helper, opens Chrome full screen (kiosk), stops the helper when Chrome quits.
+# Remyy launcher: starts the helper, opens Chrome full screen, stops the helper when Chrome quits.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
 PORT=8765
@@ -71,7 +71,7 @@ done
 # own Chrome profile: keeps Remyy separate from your normal Chrome, so the flags below always apply
 "$CHROME" \
   --user-data-dir="$DATA/chrome-profile" \
-  --app="$URL" --kiosk \
+  --app="$URL" --start-fullscreen \
   --no-first-run --no-default-browser-check \
   --disable-session-crashed-bubble --disable-features=Translate \
   --autoplay-policy=no-user-gesture-required \

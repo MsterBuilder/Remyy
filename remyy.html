@@ -144,6 +144,8 @@
     <select id="camsel"><option value="">System default</option></select>
     <label for="theme">Theme</label>
     <select id="theme"><option value="cyan">Cyan</option><option value="green">Green</option><option value="violet">Violet</option><option value="rose">Rose</option></select>
+    <label for="city">Your city (for weather and local news)</label>
+    <input id="city" placeholder="e.g. Austin, TX" maxlength="80" autocomplete="off">
     <label for="model">Model</label>
     <input id="model" value="gemini-3.8-live">
     <label class="chk"><input type="checkbox" id="wake" checked> Standby with wake word: say “Remyy”</label>
@@ -248,6 +250,7 @@ $("key").value = localStorage.getItem("remyy_key") || "";
 $("voice").value = localStorage.getItem("remyy_voice") || "Charon";
 $("model").value = localStorage.getItem("remyy_model") || "gemini-3.8-live";
 $("wake").checked = localStorage.getItem("remyy_wake") !== "0";
+$("city").value = localStorage.getItem("remyy_city") || "";
 if(!SR){ $("wake").checked=false; $("wake").disabled=true; }
 try{
   $("showcal").checked=localStorage.getItem("remyy_showcal")!=="0";
@@ -436,7 +439,7 @@ function memForget(a){
   return {ok:true,removed:hits.map(h=>h.text)};
 }
 function buildSystem(){
-  let t=SYSTEM+"\nCurrent date and time: "+new Date().toLocaleString()+".";
+  let t=SYSTEM+"\nCurrent date and time: "+new Date().toLocaleString()+"."+(userCity()?"\nThe user is in "+userCity()+". Use this for weather, local news and nearby places without asking.":"\nThe user has not said where they are; for weather or local news, ask which city once, then remember it.");
   if(memory.length){
     const lines=memory.map(m=>"- "+m.text+" (saved "+new Date(m.ts||Date.now()).toLocaleDateString()+")");
     while(lines.join("\n").length>6000) lines.shift();            // drop the oldest if too long
@@ -456,26 +459,38 @@ function renderMem(){
   $("memnote").textContent=(HAS_MAC?"Saved on this Mac in ~/.remyy/memory.json. ":"Saved in this browser only. Start the helper (python3 remyy_server.py) to keep it in a file on your Mac. ")+memory.length+" saved. Changes reach Remyy the next time it wakes.";
 }
 
+function searchError(status,msg){
+  msg=String(msg||"");
+  if(status===429||/quota|rate|exhaust/i.test(msg)) return "the Gemini search limit was reached (quota or rate limit)";
+  if(status===400&&/api key/i.test(msg)||status===401||status===403) return "the API key was rejected or lacks permission for search";
+  if(status>=500) return "Google's search service had a temporary error";
+  return msg.slice(0,140)||("HTTP "+status);
+}
 async function webSearch(q){
   q=String(q||"").slice(0,300); if(!q) return {ok:false,error:"empty query"};
   const key=$("key").value.trim(); let last="";
-  for(const m of ["gemini-flash-latest","gemini-2.5-flash"]){
+  const city=userCity(), now=new Date();
+  const sys="Answer in 2 to 4 short sentences using current web results. Include the key facts and numbers (for weather: conditions, temperature and today's high and low; for news: the top 3 stories in a few words each). Current date and time: "+now.toLocaleString()+"."
+    +(city?" The user is in "+city+"; use that for weather, local news or nearby places unless they name another place.":"");
+  // the first model has its extra thinking switched off so it answers quickly
+  const tries=[["gemini-2.5-flash",{thinkingConfig:{thinkingBudget:0}}],["gemini-flash-latest",null]];
+  for(const [m,gen] of tries){
+    const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),9000);
     try{
+      const body={systemInstruction:{parts:[{text:sys}]},contents:[{role:"user",parts:[{text:q}]}],tools:[{googleSearch:{}}]};
+      if(gen) body.generationConfig=gen;
       const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          systemInstruction:{parts:[{text:"Answer in 2 to 4 short sentences using current web results. Include the key facts and numbers. Today is "+new Date().toDateString()+"."}]},
-          contents:[{role:"user",parts:[{text:q}]}],
-          tools:[{googleSearch:{}}]
-        })});
-      const j=await r.json();
-      if(!r.ok) throw new Error((j.error&&j.error.message)||("HTTP "+r.status));
+        method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:ctl.signal});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ last=searchError(r.status,j.error&&j.error.message); console.warn("web_search",m,r.status,j.error&&j.error.message); if(r.status===429||r.status===401||r.status===403) break; continue; }
       const text=((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[]).map(x=>x.text||"").join("").trim();
       if(text){ try{ showSources((j.candidates[0].groundingMetadata||{}).groundingChunks||[]); }catch{} return {ok:true,answer:text}; }
-      last="empty answer";
-    }catch(e){ last=String(e.message||e); console.warn("web_search",m,e); }
+      last="the search returned no answer";
+    }catch(e){ last=e&&e.name==="AbortError"?"the search took too long":String(e.message||e); console.warn("web_search",m,e); }
+    finally{ clearTimeout(timer); }
   }
-  return {ok:false,error:"Search failed: "+last};
+  setStatus("Search failed: "+last);
+  return {ok:false,error:"Search failed: "+last+". Tell the user briefly why, and do not guess the answer."};
 }
 async function lookAtScreen(a){
   const q=String((a&&a.question)||"Describe what is on the screen.").slice(0,400);
@@ -625,6 +640,7 @@ async function beginSession(fromWake){
   localStorage.setItem("remyy_key",key);
   localStorage.setItem("remyy_voice",$("voice").value);
   localStorage.setItem("remyy_wake",$("wake").checked?"1":"0");
+  localStorage.setItem("remyy_city",$("city").value.trim().slice(0,80));
 
   const micId=$("mic").value, camId=$("camsel").value;
   localStorage.setItem("remyy_mic",micId); localStorage.setItem("remyy_cam",camId);
@@ -1127,7 +1143,9 @@ $("cfmYes").onclick=()=>resolveConfirm(true);
 $("cfmNo").onclick=()=>resolveConfirm(false,"declined");
 
 /* ---------- morning briefing ---------- */
+function userCity(){ return String($("city").value||"").replace(/\s+/g," ").trim().slice(0,80); }
 function briefCity(){
+  if(userCity()) return userCity();
   for(const m of memory){
     const r=/\b(?:lives?|living|based|located|resides?)\s+(?:in|near|around)\s+([A-Z][A-Za-z.'\- ]{2,40}(?:,\s*[A-Z]{2})?)/.exec(m.text||"");
     if(r) return r[1].trim();

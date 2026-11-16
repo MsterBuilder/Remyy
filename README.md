@@ -9,7 +9,7 @@ A voice assistant with a glowing HUD for your Mac. Talk to it, and it talks back
 
 - **Live voice conversation** with interruption, using the Gemini Live API. Pick a voice and preview it.
 - **Wake word.** Put it in standby and say "Remyy" to wake it.
-- **Web search** with the sources shown as link chips.
+- **Web search** with the sources shown as link chips. Enter your city on the setup screen so weather and local news work without asking.
 - **Persistent memory.** Tell it to remember things; it is stored in `~/.remyy/memory.json`, a plain file you can read or edit.
 - **Screen vision.** Ask "what's on my screen?" and it captures one screenshot to answer.
 - **Calendar and Notes.** Read today's events, add events, find and add notes.
@@ -66,6 +66,7 @@ If you run iStatistica Pro with its web access enabled, Remyy shows CPU temperat
 
 ## Troubleshooting
 
+- **Full screen:** Remyy opens in normal Chrome full screen, so right-click works. Move the mouse to the top of the screen to show the menu bar, or press Ctrl+Cmd+F to leave full screen.
 - **Wrong microphone:** pick one from the **Microphone** list on the setup screen. If Chrome still uses another, check Chrome's Settings, Privacy and security, Site settings, Microphone.
 - **"Couldn't connect":** check the API key and your internet connection. Google's live model names change; the **Model** field on the setup screen can be edited. Remyy tries a few fallback models.
 - **"Port 8765 is being used":** another program holds the port; quit it and relaunch.
