@@ -9,7 +9,8 @@ A voice assistant with a glowing HUD for your Mac. Talk to it, and it talks back
 
 - **Live voice conversation** with interruption, using the Gemini Live API. Pick a voice and preview it.
 - **Wake word.** Put it in standby and say "Remyy" to wake it.
-- **Web search** with the sources shown as link chips. Enter your city on the setup screen so weather and local news work without asking.
+- **News and facts lookup** (free, no extra key): Google News headlines plus Wikipedia summaries, with the sources shown as link chips. News needs the helper running; Google News gives headlines only. Optionally add a free Guardian key and/or a free NewsData.io key on the setup screen for article summaries. They are not required. Keys stay in your browser and are only sent to the local helper, which calls those services. Enter your city on the setup screen so weather and local news work without asking.
+- **Weather** from [Open-Meteo](https://open-meteo.com/) (free, no key, separate from your Gemini limits). Only the city name you enter is sent to it. Open-Meteo's free service is for non-commercial use.
 - **Persistent memory.** Tell it to remember things; it is stored in `~/.remyy/memory.json`, a plain file you can read or edit.
 - **Screen vision.** Ask "what's on my screen?" and it captures one screenshot to answer.
 - **Calendar and Notes.** Read today's events, add events, find and add notes.
@@ -46,7 +47,7 @@ On first launch, paste your Gemini API key on the setup screen and press Start. 
 ## Privacy
 
 - Your voice (and camera frames or screenshots, only when you use those features) is sent to Google's Gemini service. Remyy has no server of its own and sends nothing to the author.
-- Web search and screen questions go to Google's Gemini API using your key.
+- Screen questions go to Google's Gemini API using your key. News lookups send your search words to Google News and Wikipedia, plus The Guardian and NewsData.io if you add keys. Weather lookups send your city name to Open-Meteo.
 - The wake word uses Chrome's built-in speech recognition, which is processed by Google's speech service while standby is on. Turn the wake-word checkbox off to avoid it.
 - Your API key is saved in the local storage of Remyy's own Chrome profile (`~/.remyy/chrome-profile`) on your Mac. Anyone with access to your account on the Mac can read it.
 - The conversation log is stored in that same browser profile and can be exported or cleared from the **Log** panel, or turned off on the setup screen.

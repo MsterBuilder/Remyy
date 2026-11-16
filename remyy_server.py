@@ -13,7 +13,7 @@ Safety design:
   * Remyy's memory is a plain JSON file at ~/.remyy/memory.json (you can read or edit it)
 Run:  python3 remyy_server.py            (optional: --port 8000 --no-browser)
 """
-import argparse, base64, ctypes, ctypes.util, hmac, json, os, re, secrets, shutil, subprocess, sys, tempfile, threading, time, urllib.request, webbrowser
+import urllib.error, argparse, base64, ctypes, ctypes.util, hmac, json, os, re, secrets, shutil, subprocess, sys, tempfile, threading, time, urllib.request, webbrowser
 from html import escape as html_escape
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -670,7 +670,130 @@ def find_notes(a):
     return {"ok": True, "count": len(notes), "notes": notes}
 
 
+def news_search(a):
+    """Headlines from Google News RSS (fixed host, no key). Used because Gemini search grounding is not free."""
+    import urllib.parse, xml.etree.ElementTree as ET
+    q = str((a or {}).get("query", "")).strip()[:200]
+    if not q:
+        return {"ok": False, "error": "empty query"}
+    url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(q) + "&hl=en-US&gl=US&ceid=US:en"
+    try:
+        root = ET.fromstring(http_get(url))
+    except HttpFail as e:
+        return {"ok": False, "error": "Google News error: " + (e.why or str(e.code))}
+    except Exception:
+        return {"ok": False, "error": "Google News returned something unexpected"}
+    items = []
+    for it in root.iter("item"):
+        title = (it.findtext("title") or "").strip()
+        link = (it.findtext("link") or "").strip()
+        src = (it.findtext("source") or "").strip()
+        if src and title.endswith(" - " + src):
+            title = title[: -len(src) - 3]
+        if title and link.startswith("https://"):
+            items.append({"title": title[:200], "source": src[:60], "link": link, "published": (it.findtext("pubDate") or "")[:31]})
+        if len(items) >= 8:
+            break
+    return {"ok": True, "count": len(items), "items": items}
+
+
+class HttpFail(Exception):
+    def __init__(self, code=0, why=""):
+        super().__init__(why or str(code)); self.code = code; self.why = why
+
+
+def http_get(url, timeout=8):
+    """GET a fixed https URL. Tries Python first; if Python cannot verify certificates (common with python.org
+    installs on macOS) falls back to the system curl, which uses the macOS certificate store."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Remyy)", "Accept": "application/json, application/xml, */*"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read(2_000_000)
+    except urllib.error.HTTPError as e:
+        raise HttpFail(e.code, "HTTP " + str(e.code))
+    except Exception as e:
+        why = type(e).__name__ + ": " + str(getattr(e, "reason", e))[:80]
+        if "CERTIFICATE" not in why.upper() and "SSL" not in why.upper():
+            raise HttpFail(0, why)
+    # certificate problem in Python: retry with curl (the URL goes in on stdin, so a key is not visible in the process list)
+    try:
+        cfg = 'url = "' + url.replace("\\", "").replace('"', "") + '"\nuser-agent = "Mozilla/5.0 (Remyy)"\n'
+        p = subprocess.run(["/usr/bin/curl", "-sS", "-L", "-m", str(timeout), "-K", "-", "-w", "\n%{http_code}"],
+                           input=cfg.encode(), capture_output=True, timeout=timeout + 3)
+        body, _, code = p.stdout.rpartition(b"\n")
+        code = int(code or 0)
+        if p.returncode != 0 or code == 0:
+            raise HttpFail(0, "curl: " + p.stderr.decode("utf-8", "replace").strip()[:80])
+        if code >= 400:
+            raise HttpFail(code, "HTTP " + str(code))
+        return body[:2_000_000]
+    except HttpFail:
+        raise
+    except Exception as e:
+        raise HttpFail(0, "curl failed: " + type(e).__name__)
+
+
+KEY_RE = re.compile(r"[A-Za-z0-9_\-]{8,100}")
+
+
+def _get_json(url, label):
+    try:
+        return json.loads(http_get(url).decode("utf-8", "replace")), None
+    except HttpFail as e:
+        hint = " (check the key)" if e.code in (401, 403) else " (limit reached)" if e.code == 429 else ""
+        return None, label + " error: " + (e.why or str(e.code)) + hint
+    except ValueError:
+        return None, label + " returned something unexpected"
+
+
+def guardian_search(a):
+    """The Guardian Open Platform (free developer key, fixed host)."""
+    import urllib.parse
+    q = str((a or {}).get("query", "")).strip()[:200]
+    key = str((a or {}).get("key", "")).strip()
+    if not q or not KEY_RE.fullmatch(key):
+        return {"ok": False, "error": "Guardian: missing query or key"}
+    url = ("https://content.guardianapis.com/search?q=" + urllib.parse.quote(q)
+           + "&order-by=relevance&page-size=5&show-fields=trailText&api-key=" + key)
+    j, err = _get_json(url, "Guardian")
+    if err:
+        return {"ok": False, "error": err}
+    items = []
+    for r in ((j or {}).get("response") or {}).get("results", [])[:5]:
+        link = str(r.get("webUrl", ""))
+        if link.startswith("https://"):
+            summ = re.sub(r"<[^>]+>", "", str((r.get("fields") or {}).get("trailText", "")))
+            items.append({"title": str(r.get("webTitle", ""))[:200], "source": "The Guardian", "link": link,
+                          "published": str(r.get("webPublicationDate", ""))[:20], "summary": summ[:300]})
+    return {"ok": True, "items": items}
+
+
+def newsdata_search(a):
+    """NewsData.io (free key, fixed host)."""
+    import urllib.parse
+    q = str((a or {}).get("query", "")).strip()[:100]
+    key = str((a or {}).get("key", "")).strip()
+    if not q or not KEY_RE.fullmatch(key):
+        return {"ok": False, "error": "NewsData: missing query or key"}
+    url = "https://newsdata.io/api/1/latest?language=en&q=" + urllib.parse.quote(q) + "&apikey=" + key
+    j, err = _get_json(url, "NewsData")
+    if err:
+        return {"ok": False, "error": err}
+    if (j or {}).get("status") != "success":
+        return {"ok": False, "error": "NewsData: " + str(((j or {}).get("results") or {}).get("message", "request refused"))[:100]}
+    items = []
+    for r in (j.get("results") or [])[:6]:
+        link = str(r.get("link", ""))
+        if link.startswith("https://"):
+            items.append({"title": str(r.get("title", ""))[:200], "source": str(r.get("source_name") or r.get("source_id") or "")[:60],
+                          "link": link, "published": str(r.get("pubDate", ""))[:20], "summary": str(r.get("description") or "")[:300]})
+    return {"ok": True, "items": items}
+
+
 ACTIONS = {
+    "guardian_search": guardian_search,
+    "newsdata_search": newsdata_search,
+    "news_search": news_search,
     "open_app": open_app,
     "quit_app": quit_app,
     "set_volume": set_volume,
