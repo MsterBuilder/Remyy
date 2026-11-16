@@ -670,6 +670,207 @@ def find_notes(a):
     return {"ok": True, "count": len(notes), "notes": notes}
 
 
+# ----- reminders -----
+REM_ADD = """
+on run argv
+  set t to item 1 of argv
+  set hasDue to ((item 2 of argv) is "true")
+  set y to (item 3 of argv) as integer
+  set mo to (item 4 of argv) as integer
+  set dd to (item 5 of argv) as integer
+  set hh to (item 6 of argv) as integer
+  set mi to (item 7 of argv) as integer
+  set listName to item 8 of argv
+  set theNotes to item 9 of argv
+  tell application "Reminders"
+    set tl to missing value
+    if listName is not "" then
+      try
+        set tl to first list whose name is listName
+      end try
+    end if
+    if tl is missing value then set tl to default list
+    set props to {name:t}
+    if theNotes is not "" then set props to props & {body:theNotes}
+    if hasDue then
+      set sd to current date
+      set day of sd to 1
+      set year of sd to y
+      set month of sd to mo
+      set day of sd to dd
+      set time of sd to (hh * 3600 + mi * 60)
+      set props to props & {due date:sd}
+    end if
+    tell tl to make new reminder with properties props
+    return name of tl
+  end tell
+end run
+"""
+
+REM_LIST = """
+on run argv
+  set rsep to (ASCII character 30)
+  set us to (ASCII character 31)
+  set out to ""
+  tell application "Reminders"
+    repeat with l in lists
+      set lname to name of l
+      try
+        set items_ to (reminders of l whose completed is false)
+        repeat with r in items_
+          set d to ""
+          try
+            set dd to due date of r
+            if dd is not missing value then set d to my fmt(dd)
+          end try
+          set out to out & (name of r) & us & d & us & lname & rsep
+        end repeat
+      end try
+    end repeat
+  end tell
+  return out
+end run
+"""
+
+REM_DONE = """
+on run argv
+  set t to item 1 of argv
+  set found to {}
+  tell application "Reminders"
+    repeat with l in lists
+      try
+        set hits to (reminders of l whose completed is false and name contains t)
+        repeat with r in hits
+          set end of found to r
+        end repeat
+      end try
+    end repeat
+    if (count of found) is 0 then return "none"
+    if (count of found) > 1 then return "many:" & (count of found)
+    set r to item 1 of found
+    set nm to name of r
+    set completed of r to true
+    return "ok:" & nm
+  end tell
+end run
+"""
+
+
+def add_reminder(a):
+    title = str(a.get("title", "")).strip()[:200]
+    if not title:
+        raise ValueError("A reminder needs a title")
+    due = str(a.get("due", "")).strip()
+    when = parse_dt(due) if due else None
+    lst = str(a.get("list", "")).strip()[:60]
+    notes = str(a.get("notes", "")).strip()[:1000]
+    w = when or datetime.now()
+    used = run_as(REM_ADD, [title, "true" if when else "false", w.year, w.month, w.day, w.hour, w.minute, lst, notes], timeout=30)
+    return {"ok": True, "added": title, "list": used, "due": when.strftime("%Y-%m-%d %H:%M") if when else None}
+
+
+def list_reminders(a):
+    out = run_as(REM_LIST, [], timeout=45)
+    items = [{"title": r[0], "due": r[1] or None, "list": r[2]} for r in parse_records(out, 3)]
+    items.sort(key=lambda x: (x["due"] is None, x["due"] or ""))
+    n = max(1, min(50, int(float((a or {}).get("limit") or 15))))
+    return {"ok": True, "total_open": len(items), "reminders": items[:n]}
+
+
+def complete_reminder(a):
+    title = str(a.get("title", "")).strip()[:200]
+    if len(title) < 2:
+        raise ValueError("Say which reminder to complete")
+    out = run_as(REM_DONE, [title], timeout=45).strip()
+    if out.startswith("ok:"):
+        return {"ok": True, "completed": out[3:]}
+    if out == "none":
+        return {"ok": False, "error": "No open reminder matches that"}
+    return {"ok": False, "error": "More than one open reminder matches (" + out.split(":")[-1] + "). Ask which one."}
+
+
+# ----- sports (ESPN's public scoreboard feed: unofficial, may change without notice) -----
+SPORT_LEAGUES = {
+    "nba": ("basketball", "nba"), "wnba": ("basketball", "wnba"),
+    "ncaam": ("basketball", "mens-college-basketball"), "ncaaw": ("basketball", "womens-college-basketball"),
+    "nfl": ("football", "nfl"), "ncaaf": ("football", "college-football"),
+    "mlb": ("baseball", "mlb"), "nhl": ("hockey", "nhl"),
+    "mls": ("soccer", "usa.1"), "epl": ("soccer", "eng.1"), "laliga": ("soccer", "esp.1"),
+    "bundesliga": ("soccer", "ger.1"), "seriea": ("soccer", "ita.1"), "ligue1": ("soccer", "fra.1"),
+    "ucl": ("soccer", "uefa.champions"), "worldcup": ("soccer", "fifa.world"),
+    "ufc": ("mma", "ufc"), "f1": ("racing", "f1"), "pga": ("golf", "pga"),
+    "atp": ("tennis", "atp"), "wta": ("tennis", "wta"),
+}
+SPORT_DEFAULT = ["nba", "nfl", "ncaaf", "mlb", "nhl", "mls", "epl", "ucl", "ncaam"]
+
+
+def _espn_events(code, date):
+    sport, league = SPORT_LEAGUES[code]
+    url = "https://site.api.espn.com/apis/site/v2/sports/" + sport + "/" + league + "/scoreboard?limit=100"
+    if date:
+        url += "&dates=" + date
+    try:
+        j = json.loads(http_get(url).decode("utf-8", "replace"))
+    except Exception:
+        return code, None
+    out = []
+    for ev in (j.get("events") or []):
+        try:
+            comp = (ev.get("competitions") or [{}])[0]
+            st = (ev.get("status") or {}).get("type") or {}
+            cs = comp.get("competitors") or []
+            def nm(c):
+                t = c.get("team") or c.get("athlete") or {}
+                return str(t.get("displayName") or t.get("fullName") or "")[:60]
+            row = {"league": code, "name": str(ev.get("name", ""))[:100], "state": st.get("state", ""),
+                   "status": str(st.get("detail") or st.get("description") or "")[:60], "start": str(ev.get("date", ""))[:20]}
+            if len(cs) == 2 and all(c.get("team") for c in cs):
+                home = next((c for c in cs if c.get("homeAway") == "home"), cs[0])
+                away = next((c for c in cs if c is not home), cs[1])
+                row.update({"home": nm(home), "away": nm(away), "home_score": home.get("score"), "away_score": away.get("score"),
+                            "_keys": " ".join(str((c.get("team") or {}).get(k, "")) for c in cs for k in ("displayName", "shortDisplayName", "abbreviation", "name")).lower()})
+            else:
+                row["_keys"] = row["name"].lower()
+            out.append(row)
+        except Exception:
+            continue
+    return code, out
+
+
+def sports_scores(a):
+    from concurrent.futures import ThreadPoolExecutor
+    a = a or {}
+    league = re.sub(r"[^a-z0-9]", "", str(a.get("league", "")).lower())
+    aliases = {"premierleague": "epl", "championsleague": "ucl", "collegefootball": "ncaaf", "collegebasketball": "ncaam",
+               "mensbasketball": "ncaam", "womensbasketball": "ncaaw", "formula1": "f1", "golf": "pga", "mma": "ufc",
+               "soccer": "epl", "football": "nfl", "basketball": "nba", "baseball": "mlb", "hockey": "nhl", "tennis": "atp"}
+    league = aliases.get(league, league)
+    team = str(a.get("team", "")).strip().lower()[:40]
+    date = re.sub(r"[^0-9]", "", str(a.get("date", "")))[:8]
+    if date and len(date) != 8:
+        date = ""
+    if league and league not in SPORT_LEAGUES:
+        return {"ok": False, "error": "Unknown league. Known: " + ", ".join(sorted(SPORT_LEAGUES))}
+    codes = [league] if league else (list(SPORT_LEAGUES) if team else SPORT_DEFAULT)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(lambda c: _espn_events(c, date), codes))
+    failed = [c for c, ev in results if ev is None]
+    if len(failed) == len(codes):
+        return {"ok": False, "error": "The sports feed could not be reached (it is unofficial and may have changed)"}
+    rows = [r for c, ev in results if ev for r in ev]
+    if team:
+        rows = [r for r in rows if team in r["_keys"]]
+    order = {"in": 0, "post": 1, "pre": 2}
+    rows.sort(key=lambda r: (order.get(r["state"], 3), r["start"]))
+    games = []
+    for r in rows[:25]:
+        r.pop("_keys", None)
+        r.pop("state", None)
+        games.append({k: v for k, v in r.items() if v not in (None, "")})
+    return {"ok": True, "count": len(rows), "games": games,
+            "note": "Live games first, then finished, then upcoming. Times are UTC." if games else "No games found for that"}
+
+
 def news_search(a):
     """Headlines from Google News RSS (fixed host, no key). Used because Gemini search grounding is not free."""
     import urllib.parse, xml.etree.ElementTree as ET
@@ -791,6 +992,10 @@ def newsdata_search(a):
 
 
 ACTIONS = {
+    "add_reminder": add_reminder,
+    "list_reminders": list_reminders,
+    "complete_reminder": complete_reminder,
+    "sports_scores": sports_scores,
     "guardian_search": guardian_search,
     "newsdata_search": newsdata_search,
     "news_search": news_search,
