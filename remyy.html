@@ -56,6 +56,10 @@
   #memlist{list-style:none;padding:0;margin:0 0 14px;max-height:38vh;overflow:auto}
   #memlist li{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;line-height:1.4}
   #memlist li button{background:none;border:0;color:#ff8b7d;cursor:pointer;font-size:18px;line-height:1;padding:0 4px}
+  #memlist li span{flex:1}
+  #memlist li button.medit{color:var(--dim);font-size:15px}
+  #memlist li button.medit:hover{color:var(--c1,#7fe9ff)}
+  #memlist li input.mein{flex:1;min-width:0;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:6px;color:inherit;font:inherit;padding:4px 8px}
   #memnote{font-size:13px}
   .chk{display:flex;gap:10px;align-items:center;font-size:14px;color:var(--text);margin:18px 0 0}
   .chk input{width:auto}
@@ -123,6 +127,8 @@
   #cfm small{width:100%;text-align:center;color:var(--dim);font-size:12px}
   #cfmBox{margin-top:16px;font-size:13px;color:var(--dim)}
   #cfmBox label.chk{margin:8px 0 0;font-size:14px}
+  #updnote{display:block;margin:12px 0 0;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;color:var(--c1,#7fe9ff);text-decoration:none;text-align:center}
+  #updnote:hover{background:rgba(255,255,255,.06)}
   .hidden{display:none!important}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -156,6 +162,7 @@
     <label class="chk"><input type="checkbox" id="showcal" checked> Show today’s Calendar events on screen</label>
     <label class="chk"><input type="checkbox" id="keeplog" checked> Keep a conversation log in this browser</label>
     <div id="cfmBox"><div>Ask me first (answer yes or no by voice, or click) before Remyy does these:</div></div>
+    <a id="updnote" class="hidden" target="_blank" rel="noopener noreferrer" href="https://github.com/MsterBuilder/Remyy/releases/latest"></a>
     <button class="go" id="start">Wake Remyy</button>
     <div class="row" style="margin-top:12px"><button type="button" class="sec" id="memopen" style="flex:1;padding:10px">Memory</button><button type="button" class="sec" id="logopen" style="flex:1;padding:10px">Conversation log</button></div>
     <div id="err"></div>
@@ -216,6 +223,8 @@ import { GoogleGenAI, Modality } from "https://cdn.jsdelivr.net/npm/@google/gena
 
 const $ = id => document.getElementById(id);
 const TOKEN = "__REMYY_TOKEN__";              // filled in by remyy_server.py
+const APP_VERSION = "1.1.0";                        // bump this when you publish a new GitHub release
+const UPDATE_REPO = "MsterBuilder/Remyy";           // owner/name of the GitHub repository checked for new releases
 const HAS_MAC = !TOKEN.startsWith("__");       // true only when served by the helper
 const IDLE_MS = 90000;                         // go to standby after 90s of silence
 const WAKE_RE = /\br[ea]m+[iey]{1,2}\b/i;   // Remy, Remi, Remmy, Rami...
@@ -460,7 +469,22 @@ function renderMem(){
     const li=document.createElement("li"), sp=document.createElement("span"), b=document.createElement("button");
     sp.textContent=m.text; b.textContent="×"; b.title="Delete"; b.setAttribute("aria-label","Delete: "+m.text);
     b.onclick=()=>{ memory=memory.filter(x=>x.id!==m.id); memSave(); renderMem(); };
-    li.append(sp,b); ul.appendChild(li);
+    const ed=document.createElement("button"); ed.textContent="✎"; ed.title="Edit"; ed.className="medit"; ed.setAttribute("aria-label","Edit: "+m.text);
+    const startEdit=()=>{
+      const inp=document.createElement("input"); inp.type="text"; inp.value=m.text; inp.maxLength=300; inp.className="mein"; inp.setAttribute("aria-label","Edit memory");
+      let done=false;
+      const finish=ok=>{
+        if(done) return; done=true;
+        const t=inp.value.trim().slice(0,300);
+        if(ok&&t.length>=3&&t!==m.text){ m.text=t; memSave(); }
+        renderMem();
+      };
+      inp.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); finish(true); } else if(e.key==="Escape"){ e.stopPropagation(); finish(false); } };
+      inp.onblur=()=>finish(true);
+      li.replaceChild(inp,sp); ed.style.visibility="hidden"; inp.focus(); inp.select();
+    };
+    ed.onclick=startEdit; sp.ondblclick=startEdit;
+    li.append(sp,ed,b); ul.appendChild(li);
   });
   $("memnote").textContent=(HAS_MAC?"Saved on this Mac in ~/.remyy/memory.json. ":"Saved in this browser only. Start the helper (python3 remyy_server.py) to keep it in a file on your Mac. ")+memory.length+" saved. Changes reach Remyy the next time it wakes.";
 }
@@ -1364,6 +1388,29 @@ function frame(ts){
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+/* ---------- update notice: asks GitHub (at most once a day) whether a newer release exists ---------- */
+(async function checkUpdate(){
+  try{
+    const parse=v=>String(v||"").replace(/^v/i,"").split(/[.\-+]/).slice(0,3).map(n=>parseInt(n,10)||0);
+    const newer=(a,b)=>{ const x=parse(a), y=parse(b); for(let i=0;i<3;i++){ if((x[i]||0)!==(y[i]||0)) return (x[i]||0)>(y[i]||0); } return false; };
+    let latest="", at=0;
+    try{ const c=JSON.parse(localStorage.getItem("remyy_upd")||"{}"); latest=c.v||""; at=c.t||0; }catch{}
+    if(Date.now()-at>864e5){
+      latest="";
+      const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),6000);
+      try{
+        const r=await fetch("https://api.github.com/repos/"+UPDATE_REPO+"/releases/latest",{signal:ctl.signal,headers:{Accept:"application/vnd.github+json"}});
+        if(r.ok){ const j=await r.json(); latest=String(j.tag_name||"").slice(0,30); }
+      }catch{} finally{ clearTimeout(t); }
+      try{ localStorage.setItem("remyy_upd",JSON.stringify({v:latest,t:Date.now()})); }catch{}
+    }
+    if(latest&&/^v?\d+(\.\d+){0,2}/.test(latest)&&newer(latest,APP_VERSION)){
+      const a=$("updnote"); a.textContent="Update available: "+latest+" (you have "+APP_VERSION+"). Tap to see what is new.";
+      a.classList.remove("hidden");
+    }
+  }catch{}
+})();
 </script>
 </body>
 </html>

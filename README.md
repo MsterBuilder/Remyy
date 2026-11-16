@@ -88,3 +88,7 @@ Remyy is an independent project. It is not affiliated with or endorsed by Google
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Update notice
+
+Once a day the setup screen asks GitHub's public API for the latest release of this repository and shows a banner if it is newer than the version in `remyy.html` (`APP_VERSION`). Nothing is sent except that request. Maintainers: when you publish a new GitHub Release, tag it like `v1.2.0` and set `APP_VERSION` to match.
