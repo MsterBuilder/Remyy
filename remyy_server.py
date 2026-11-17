@@ -2,7 +2,7 @@
 """
 Remyy helper for macOS.
 
-Serves remyy.html on http://localhost:8000 and gives it a small set of Mac actions.
+Serves remyy.html on http://localhost:8000 by default (Remyy.app passes --port 8765) and gives it a small set of Mac actions.
 Safety design:
   * binds to 127.0.0.1 only
   * every launch makes a random token that only the page it serves knows
@@ -309,6 +309,8 @@ def media_control(a):
     cmd = a.get("command")
     if app not in ("Music", "Spotify"):
         raise ValueError("app must be Music or Spotify")
+    if app == "Spotify" and not any(os.path.isdir(d + "/Spotify.app") for d in ("/Applications", str(Path.home() / "Applications"))):
+        raise ValueError("Spotify is not installed")
     verbs = {"play_pause": "playpause", "next": "next track", "previous": "previous track"}
     if cmd in verbs:
         osa(f'tell application "{app}" to {verbs[cmd]}')
@@ -327,20 +329,33 @@ def media_control(a):
     raise ValueError("Unknown media command")
 
 
+def app_running(app):
+    """True if the app is open. Asks System Events only, so it never names the app in a script (that can pop up a
+    "Where is <app>?" dialog on Macs where it is not installed) and never launches it."""
+    try:
+        return osa('tell application "System Events" to return ((name of every process) contains "%s") as text' % app, timeout=5) == "true"
+    except Exception:
+        return False
+
+
 def now_playing(a):
-    """Read-only: report what Spotify or Music is playing, without launching either app."""
+    """Read-only: report what Spotify or Music is playing, without launching either app.
+    Each player is checked on its own, so a missing or failing one never stops the other from being read."""
     found = None
     for app in ("Spotify", "Music"):
-        out = osa(
-            'tell application "System Events" to set up to (name of every process) contains "%s"' % app,
-            'if up is false then return ""',
-            'tell application "%s"' % app,
-            'if player state is stopped then return ""',
-            'set st to "paused"',
-            'if player state is playing then set st to "playing"',
-            'return (name of current track) & (ASCII character 31) & (artist of current track) & (ASCII character 31) & st',
-            "end tell",
-        )
+        if not app_running(app):
+            continue                      # running implies installed, so the script below is safe to compile
+        try:
+            out = osa(
+                'tell application "%s"' % app,
+                'if player state is stopped then return ""',
+                'set st to "paused"',
+                'if player state is playing then set st to "playing"',
+                'return (name of current track) & (ASCII character 31) & (artist of current track) & (ASCII character 31) & st',
+                "end tell",
+            )
+        except Exception:
+            continue
         if out:
             parts = out.split("\x1f")
             if len(parts) >= 3:
@@ -1071,7 +1086,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, '{"ok":false,"error":"bad origin"}')
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if n > (131072 if self.path == "/api/memory" else 8192):
+            if n < 0 or n > (131072 if self.path == "/api/memory" else 8192):
                 raise ValueError("too large")
             req = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
@@ -1099,7 +1114,8 @@ class Handler(BaseHTTPRequestHandler):
         args = req.get("args") if isinstance(req.get("args"), dict) else {}
         try:
             result = fn(args)
-            print(f"  {datetime.now():%H:%M:%S}  {req['action']} {json.dumps(args)[:100]}")
+            safe = {k: ("***" if str(k).lower() in ("key", "apikey", "api_key", "token") else v) for k, v in (args.items() if isinstance(args, dict) else [])}
+            print(f"  {datetime.now():%H:%M:%S}  {req['action']} {json.dumps(safe)[:100]}")
         except Exception as e:
             result = {"ok": False, "error": str(e)[:300]}
             print(f"  {datetime.now():%H:%M:%S}  {req['action']} FAILED: {e}")

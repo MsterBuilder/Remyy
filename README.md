@@ -42,6 +42,8 @@ On first launch, paste your Gemini API key on the setup screen and press Start. 
 
 **Run without the app:** `python3 remyy_server.py` starts the helper and opens Remyy in your default browser at `http://localhost:8000/remyy.html`. Options: `--port 8000 --no-browser`.
 
+**Which port?** Running `python3 remyy_server.py` yourself uses port **8000** by default (change it with `--port`). The `Remyy.app` made by `install_remyy_app.sh` starts the same helper on port **8765** so the two never clash, so you can have both. Use whichever address matches how you started it.
+
 **Uninstall:** delete `~/Applications/Remyy.app` and, to remove all data, the folder `~/.remyy`.
 
 ## Privacy
@@ -70,7 +72,7 @@ If you run iStatistica Pro with its web access enabled, Remyy shows CPU temperat
 - **Full screen:** Remyy opens in normal Chrome full screen, so right-click works. Move the mouse to the top of the screen to show the menu bar, or press Ctrl+Cmd+F to leave full screen.
 - **Wrong microphone:** pick one from the **Microphone** list on the setup screen. If Chrome still uses another, check Chrome's Settings, Privacy and security, Site settings, Microphone.
 - **"Couldn't connect":** check the API key and your internet connection. Google's live model names change; the **Model** field on the setup screen can be edited. Remyy tries a few fallback models.
-- **"Port 8765 is being used":** another program holds the port; quit it and relaunch.
+- **"Port 8765 is being used"** (Remyy.app) or **"Address already in use"** on port 8000 (`python3 remyy_server.py`): another program holds that port. Quit it and relaunch, or for the manual helper pick another with `--port 8001`.
 - **Logs:** `~/.remyy/launcher.log`.
 - **After updating the files,** run `bash install_remyy_app.sh` again.
 
